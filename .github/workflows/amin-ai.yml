@@ -26,6 +26,47 @@ jobs:
           curl -fL -o app/libs/onnxruntime-android-1.22.0.aar \
             https://repo1.maven.org/maven2/com/microsoft/onnxruntime/onnxruntime-android/1.22.0/onnxruntime-android-1.22.0.aar
           ls -la app/libs
+      - name: Apply Amin AI patch
+        run: |
+          python3 - <<'PY'
+          import re, pathlib
+          p = pathlib.Path("app/src/main/java/com/craneai/findr/ui/settings/FolderScopeEditor.kt")
+          s = p.read_text()
+          if "excelPicker" not in s:
+              a1 = "  val excludePicker = rememberLauncherForActivityResult(ActivityResultContracts.OpenDocumentTree()) { pickedFolder(it, vm::excludeFolder) }\n"
+              assert a1 in s, "anchor 1 missing"
+              launcher = '''  val excelPicker = rememberLauncherForActivityResult(ActivityResultContracts.OpenMultipleDocuments()) { uris ->
+            uris.forEach { u ->
+              val folder = runCatching {
+                val rel = DocumentsContract.getDocumentId(u).substringAfter(':', "").let { r ->
+                  if (r.startsWith("/storage/")) r.substringAfter("/storage/emulated/0/", "") else r
+                }
+                rel.substringBeforeLast('/', "")
+              }.getOrNull().orEmpty()
+              if (folder.isNotEmpty()) vm.addFolder(folder) else pickerError = true
+            }
+          }
+          '''
+              s = s.replace(a1, a1 + launcher, 1)
+              m = re.search(r"      Text\(stringResource\(R\.string\.scope_add\), style = SunType\.Label\)\n    \}\n", s)
+              assert m, "anchor 2 missing"
+              button = '''    SunOutlinedButton(
+              onClick = { excelPicker.launch(arrayOf("application/vnd.openxmlformats-officedocument.spreadsheetml.sheet", "application/vnd.ms-excel", "text/csv", "text/comma-separated-values", "application/csv", "*/*")) },
+              modifier = Modifier.fillMaxWidth().padding(top = Sun.S8),
+            ) {
+              Icon(Icons.Rounded.Description, contentDescription = null, modifier = Modifier.size(20.dp))
+              Spacer(Modifier.width(Sun.S8))
+              Text(stringResource(R.string.amin_add_excel), style = SunType.Label)
+            }
+          '''
+              s = s[:m.end()] + button + s[m.end():]
+              p.write_text(s)
+          base = pathlib.Path("app/src/main/res")
+          (base / "values/amin_strings.xml").write_text('<?xml version="1.0" encoding="utf-8"?>\n<resources>\n    <string name="amin_add_excel">Add Excel or CSV files</string>\n</resources>\n')
+          (base / "values-ar").mkdir(exist_ok=True)
+          (base / "values-ar/amin_strings.xml").write_text('<?xml version="1.0" encoding="utf-8"?>\n<resources>\n    <string name="amin_add_excel">إضافة ملفات Excel أو CSV</string>\n</resources>\n')
+          PY
+          grep -n "excelPicker" app/src/main/java/com/craneai/findr/ui/settings/FolderScopeEditor.kt
       - name: Build APK
         run: |
           chmod +x gradlew
@@ -48,4 +89,4 @@ jobs:
         run: |
           gh release create "amin-ai-run${{ github.run_number }}" amin-ai.apk \
             --title "Amin AI build ${{ github.run_number }}" \
-            --notes "Built from Trawl source (baseline, no patch)"
+            --notes "Trawl + Excel/CSV picker patch"
